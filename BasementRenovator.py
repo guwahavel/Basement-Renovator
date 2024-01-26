@@ -110,7 +110,7 @@ def findInstallPath():
                     )
                     if os.path.isfile(libconfig):
                         libLines = list(open(libconfig, "r"))
-                        matcher = re.compile(r'"\d+"\s*"(.*?)"')
+                        matcher = re.compile(r'"path"\s*"(.*?)"')
                         installDirs = map(
                             lambda res: os.path.normpath(res.group(1)),
                             filter(
@@ -2318,9 +2318,9 @@ class Room(QListWidgetItem):
 
         QListWidgetItem.__init__(self)
 
+        self.info = Room.Info(myType, variant, subtype, shape)
         self.name = name
 
-        self.info = Room.Info(myType, variant, subtype, shape)
         if doors:
             if len(self.info.doors) != len(doors):
                 printf(f"{name} ({variant}): Invalid doors!", doors)
@@ -2357,12 +2357,21 @@ class Room(QListWidgetItem):
 
     @property
     def name(self):
-        return self.data(0x100)
+        return self.data(Qt.UserRole)
 
     @name.setter
     def name(self, n):
-        self.setData(0x100, n)
+        self.setData(Qt.UserRole, n)
+        self.setText(f"{self.info.variant} - {n}")
         self.seed = hash(n)
+
+    @property
+    def isCurrent(self):
+        return self.data(Qt.UserRole + 100)
+
+    @isCurrent.setter
+    def isCurrent(self, s):
+        self.setData(Qt.UserRole + 100, s)
 
     @property
     def gridSpawns(self):
@@ -2609,6 +2618,17 @@ class RoomDelegate(QStyledItemDelegate):
         self.pixmap = QPixmap("resources/UI/CurrentRoom.png")
         QStyledItemDelegate.__init__(self)
 
+    def setEditorData(self, editor: QWidget, index: QModelIndex) -> None:
+        room = mainWindow.roomList.list.item(index.row())
+        editor.setText(room.name)
+
+    def setModelData(
+        self, editor: QWidget, model: QAbstractItemModel, index: QModelIndex
+    ) -> None:
+        room = mainWindow.roomList.list.item(index.row())
+        room.name = editor.text()
+        mainWindow.dirt()
+
     def paint(self, painter, option, index):
         painter.fillRect(
             option.rect.right() - 19, option.rect.top(), 17, 16, QBrush(Qt.white)
@@ -2617,7 +2637,7 @@ class RoomDelegate(QStyledItemDelegate):
         QStyledItemDelegate.paint(self, painter, option, index)
 
         item = mainWindow.roomList.list.item(index.row())
-        if item is not None and item.data(100):
+        if item is not None and item.isCurrent:
             painter.drawPixmap(option.rect.right() - 19, option.rect.top(), self.pixmap)
 
 
@@ -2851,7 +2871,6 @@ class RoomSelector(QWidget):
 
         self.list.itemSelectionChanged.connect(self.setButtonStates)
         self.list.itemSelectionChanged.connect(self.handleRoomListDisplayChanged)
-        self.list.doubleClicked.connect(self.activateEdit)
         self.list.customContextMenuRequested.connect(self.customContextMenu)
 
         model = self.list.model()
@@ -2860,8 +2879,6 @@ class RoomSelector(QWidget):
         model.modelReset.connect(
             self.handleRoomListDisplayChanged
         )  # fired when cleared
-
-        self.list.itemDelegate().closeEditor.connect(self.editComplete)
 
     def setupToolbar(self):
         self.toolbar = QToolBar()
@@ -2887,9 +2904,6 @@ class RoomSelector(QWidget):
 
         self.mirror = False
         self.mirrorY = False
-        # self.IDButton = self.toolbar.addAction(QIcon(), 'ID', self.turnIDsOn)
-        # self.IDButton.setCheckable(True)
-        # self.IDButton.setChecked(True)
 
     def handleRoomListDisplayChanged(self):
         selectedRooms = len(self.selectedRooms())
@@ -2906,21 +2920,6 @@ class RoomSelector(QWidget):
             if numRooms > 0
             else ""
         )
-
-    def activateEdit(self):
-        room = self.selectedRoom()
-        room.setText(room.name)
-        self.list.editItem(self.selectedRoom())
-
-    def editComplete(self, lineEdit):
-        room = self.selectedRoom()
-        room.name = lineEdit.text()
-        room.setText(f"{room.info.variant} - {room.name}")
-        mainWindow.dirt()
-
-    # @pyqtSlot(bool)
-    def turnIDsOn(self):
-        return
 
     # @pyqtSlot(QPoint)
     def customContextMenu(self, pos):
@@ -3081,45 +3080,45 @@ class RoomSelector(QWidget):
     def colorizeClearFilterButtons(self):
         colour = "background-color: #F00;"
 
-        all = False
+        enableAll = False
 
         # Name Button
         if self.IDFilter.text():
             self.clearName.setStyleSheet(colour)
-            all = True
+            enableAll = True
         else:
             self.clearName.setStyleSheet("")
 
         # Entity Button
         if self.entityToggle.checked:
             self.clearEntity.setStyleSheet(colour)
-            all = True
+            enableAll = True
         else:
             self.clearEntity.setStyleSheet("")
 
         # Type Button
         if self.filter.typeData >= 0:
             self.clearType.setStyleSheet(colour)
-            all = True
+            enableAll = True
         else:
             self.clearType.setStyleSheet("")
 
         # Size Button
         if self.filter.sizeData >= 0:
             self.clearSize.setStyleSheet(colour)
-            all = True
+            enableAll = True
         else:
             self.clearSize.setStyleSheet("")
 
         # Extra filters Button
         if self.filter.extraData["enabled"]:
             self.clearExtra.setStyleSheet(colour)
-            all = True
+            enableAll = True
         else:
             self.clearExtra.setStyleSheet("")
 
         # All Button
-        if all:
+        if enableAll:
             self.clearAll.setStyleSheet(colour)
         else:
             self.clearAll.setStyleSheet("")
@@ -3410,7 +3409,7 @@ class RoomSelector(QWidget):
         mainWindow.storeEntityList()
 
         lastPlace = self.list.indexFromItem(rooms[-1]).row() + 1
-        self.selectedRoom().setData(100, False)
+        self.selectedRoom().isCurrent = False
         self.list.setCurrentItem(None, QItemSelectionModel.ClearAndSelect)
 
         for room in reversed(rooms):
@@ -3451,8 +3450,12 @@ class RoomSelector(QWidget):
             )
             r.xmlProps = deepcopy(room.xmlProps)
 
-            # Mirror the room
-            if self.mirror:
+            # Ball & Chains will not be flipped correctly; Basement Renovator needs to
+            # be updated with the proper logic to decode the
+            # sub-type and flip it.
+            if self.mirror and not self.roomHasEntity(
+                room, EntityType["BALL_AND_CHAIN"]
+            ):
                 if self.mirrorY:
                     r.mirrorY()
                 else:
@@ -3462,6 +3465,15 @@ class RoomSelector(QWidget):
             self.list.setCurrentItem(r, QItemSelectionModel.Select)
 
         mainWindow.dirt()
+
+    def roomHasEntity(self, room, entityTypeToMatch: int) -> bool:
+        for spawn in room._gridSpawns:
+            for entity in spawn:
+                entityType = entity[0]
+                if entityType == entityTypeToMatch:
+                    return True
+
+        return False
 
     def mirrorButtonOn(self):
         self.mirror = True
@@ -5327,7 +5339,7 @@ class MainWindow(QMainWindow):
             self.storeEntityList(prev)
 
             # Clear the current room mark
-            prev.setData(100, False)
+            prev.isCurrent = False
 
         # Clear the room and reset the size
         self.scene.clear()
@@ -5346,7 +5358,7 @@ class MainWindow(QMainWindow):
                 e = Entity(x, y, ent[0], ent[1], ent[2], ent[3], respawning=True)
 
         # Make the current Room mark for clearer multi-selection
-        current.setData(100, True)
+        current.isCurrent = True
 
     # @pyqtSlot(EntityItem)
     def handleObjectChanged(self, entity, setFilter=True):
@@ -5375,6 +5387,7 @@ class MainWindow(QMainWindow):
         self.roomList.list.clear()
         self.scene.clear()
         self.path = ""
+        self.floorInfo = xmlLookups.stages.lookup(name="Basement")[-1]
 
         self.dirt()
         self.roomList.changeFilter()
