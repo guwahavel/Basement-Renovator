@@ -49,7 +49,6 @@ end
 
 local RoomIndex = {}
 
-BasementRenovator.DisableUI = false
 if not BasementRenovator.TestRoomData then
     log('No room to test; please disable the mod')
     return
@@ -68,7 +67,6 @@ else
 
         room.Index = i
     end
-    BasementRenovator.DisableUI = roomData.DisableUI
     roomData.CurrentIndex = 0
 end
 
@@ -348,7 +346,7 @@ function BasementRenovator.RenderDoorSlots(room, doorSlots, enterSlot)
     end
 
     -- render invalid door slots as effects
-    if not BasementRenovator.DisableUI then
+    if BasementRenovator.TestRoomData.DisableUI ~= 1 then
         for _, slot in pairs(doorSlots) do
             local doorDir = DoorToDirection[slot]
 
@@ -487,7 +485,7 @@ BasementRenovator.mod:AddCallback(ModCallbacks.MC_POST_RENDER, function()
 
     local topLeft = game:GetRoom():GetRenderSurfaceTopLeft()
     local pos = Vector(20, topLeft.Y * 2 + 286) --Vector(442,286)
-    if not BasementRenovator.DisableUI then
+    if BasementRenovator.TestRoomData.DisableUI ~= 1 then
         Isaac.RenderScaledText("BASEMENT RENOVATOR TEST: " .. room.Name .. " (" .. room.Variant .. ", Difficulty: " .. roomDesc.Data.Difficulty .. ") [" .. filename .. ']', pos.X, pos.Y - 28, 0.5, 0.5, 255, 255, 0, 0.75)
         Isaac.RenderScaledText("Test Type: " .. test.TestType ..  " --- In Test Room: " .. (room.Invalid and 'NO' or ('YES' .. (BasementRenovator.LockDoorSlot and ' [DOOR SLOT LOCKED]' or ''))), pos.X, pos.Y - 20, 0.5, 0.5, 255, 255, 0, 0.75)
     end
@@ -495,7 +493,7 @@ BasementRenovator.mod:AddCallback(ModCallbacks.MC_POST_RENDER, function()
     local enableCycling = false
     if #test.Rooms > 1 and test.TestType == 'InstaPreview' then
         enableCycling = true
-        if not BasementRenovator.DisableUI then
+        if BasementRenovator.TestRoomData.DisableUI ~= 1 then
             Isaac.RenderScaledText("Press . (period) to cycle forward and , (comma) to go back. Current: " .. (test.CurrentIndex + 1) .. '/' .. #test.Rooms, pos.X, pos.Y - 36, 0.5, 0.5, 0, 255, 255, 0.75)
         end
     end
@@ -513,10 +511,6 @@ BasementRenovator.mod:AddCallback(ModCallbacks.MC_POST_RENDER, function()
         if SafeKeyboardTriggered(Keyboard.KEY_SEMICOLON, ci) then
             -- toggle lock door slot
             BasementRenovator.LockDoorSlot = not BasementRenovator.LockDoorSlot
-        end
-
-        if SafeKeyboardTriggered(Keyboard.KEY_U, ci) then
-            BasementRenovator.DisableUI = not BasementRenovator.DisableUI
         end
 
         if enableCycling then
