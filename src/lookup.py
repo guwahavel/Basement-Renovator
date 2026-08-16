@@ -1429,6 +1429,14 @@ class MainLookup:
                     except ET.ParseError as e:
                         printf(f'ERROR parsing entities2 xml for mod "{modName}": {e}')
                         return
+                else:
+                    entities2Path = os.path.join(modPath, "content-repentogon/entities2.xml")
+                    try:
+                        self.entities2root = ET.parse(entities2Path).getroot()
+                    except ET.ParseError as e:
+                        printf(f'ERROR parsing entities2 xml for mod "{modName}": {e}')
+                        return
+
 
     def __init__(self, version, verbose):
         self.basemod = self.ModConfig()
