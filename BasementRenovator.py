@@ -26,9 +26,95 @@
 # 		Bosscolours for the alternate boss entities
 #
 
-from PyQt5.QtCore import *
-from PyQt5.QtGui import *
-from PyQt5.QtWidgets import *
+from PyQt5.QtCore import (
+    QAbstractItemModel,
+    QAbstractListModel,
+    QCommandLineParser,
+    QDir,
+    QFile,
+    QItemSelectionModel,
+    QModelIndex,
+    QRect,
+    QRectF,
+    QRegularExpression,
+    QSettings,
+    QSize,
+    QTimer,
+    QUrl,
+    Qt,
+    pyqtSignal,
+)
+from PyQt5.QtGui import (
+    QBrush,
+    QClipboard,
+    QColor,
+    QColorConstants,
+    QCursor,
+    QDesktopServices,
+    QFont,
+    QGuiApplication,
+    QIcon,
+    QImage,
+    QKeySequence,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QPen,
+    QPixmap,
+    QResizeEvent,
+    QStandardItem,
+    QTransform,
+)
+from PyQt5.QtWidgets import (
+    QAbstractScrollArea,
+    QAbstractSpinBox,
+    QApplication,
+    QButtonGroup,
+    QCheckBox,
+    QComboBox,
+    QDateTimeEdit,
+    QDial,
+    QDialog,
+    QDialogButtonBox,
+    QDockWidget,
+    QDoubleSpinBox,
+    QFileDialog,
+    QFormLayout,
+    QGraphicsItem,
+    QGraphicsProxyWidget,
+    QGraphicsScene,
+    QGraphicsView,
+    QGraphicsWidget,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QListView,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QRadioButton,
+    QSizePolicy,
+    QSlider,
+    QSpinBox,
+    QStatusBar,
+    QStyle,
+    QStyledItemDelegate,
+    QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QToolBar,
+    QToolButton,
+    QToolTip,
+    QVBoxLayout,
+    QWidget,
+    QWidgetAction,
+)
 from copy import deepcopy
 
 import traceback
@@ -43,7 +129,7 @@ import datetime
 import random
 import urllib.parse
 import urllib.request
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import xml.etree.cElementTree as ET
 import psutil
 
@@ -64,9 +150,21 @@ def getGameVersion():
     Returns the current compatibility mode, and the sub version if it exists
     """
     # default mode if not set
-    mode = settings.value("CompatibilityMode", "Repentance")
+    mode = settings.value("CompatibilityMode", "Repentance+")
 
     return mode
+
+
+def willLaunchREPENTOGON():
+    exePath: str | None = settings.value("CustomExePath")
+    return exePath and exePath.lower().endswith("repentogonlauncher.exe")
+
+
+def canUseREPENTOGON():
+    if getGameVersion() != "Repentance+":
+        return False
+
+    return willLaunchREPENTOGON()
 
 
 STEAM_PATH = None
@@ -186,7 +284,7 @@ def findModsPath(installPath=None):
 
     version = getGameVersion()
 
-    if version not in ["Afterbirth+", "Repentance"]:
+    if version not in ["Afterbirth+", "Repentance", "Repentance+"]:
         printf(f"INFO: {version} does not support mod folders")
         return ""
 
@@ -240,7 +338,7 @@ def findModsPath(installPath=None):
                     "Couldn't locate Mods folder and no folder was selected.",
                 )
                 return
-            if not QDir(modsPath).exists:
+            if not QDir(modsPath).exists():
                 QMessageBox.warning(
                     None, "Error", "Selected folder does not exist or is not a folder."
                 )
@@ -316,8 +414,7 @@ class RoomScene(QGraphicsScene):
         self.newRoomSize(1)
 
         # Make the bitfont
-        q = QImage()
-        q.load("resources/UI/Bitfont.png")
+        q = anm2.loadImage("resources/UI/Bitfont.png")
 
         self.bitfont = [
             QPixmap.fromImage(q.copy(i * 12, j * 12, 12, 12))
@@ -332,14 +429,32 @@ class RoomScene(QGraphicsScene):
         self.bgState = []
         self.framecache = {}
 
-        self.floorAnim = anm2.Config(
-            "resources/Backgrounds/FloorBackdrop.anm2", "resources"
-        )
+        self.floorAnim = None
+        self.wallAnim = None
+        self.loadAnims()
+
         self.floorImg = None
-        self.wallAnim = anm2.Config(
-            "resources/Backgrounds/WallBackdrop.anm2", "resources"
-        )
         self.wallImg = None
+
+    def loadAnims(self):
+        gfx = self.getBGGfxData()
+        gfx = gfx and gfx.get("Paths")
+
+        floorAnim = (
+            gfx["FloorAnim"]
+            if gfx and "FloorAnim" in gfx
+            else "resources/Backgrounds/FloorBackdrop.anm2"
+        )
+        if not (self.floorAnim and self.floorAnim.path == Path(floorAnim).resolve()):
+            self.floorAnim = anm2.Config(floorAnim, "resources")
+
+        wallAnim = (
+            gfx["WallAnim"]
+            if gfx and "WallAnim" in gfx
+            else "resources/Backgrounds/WallBackdrop.anm2"
+        )
+        if not (self.wallAnim and self.wallAnim.path == Path(wallAnim).resolve()):
+            self.wallAnim = anm2.Config(wallAnim, "resources")
 
     def newRoomSize(self, shape):
         self.roomInfo = Room.Info(shape=shape)
@@ -402,16 +517,16 @@ class RoomScene(QGraphicsScene):
 
         return res
 
-    def getFrame(self, key, anm2):
+    def getFrame(self, key: str, anim: anm2.Config) -> QPixmap:
         cache = self.framecache.get(key)
         if not cache:
             cache = {}
             self.framecache[key] = cache
 
-        frame = cache.get(anm2.frame)
+        frame = cache.get(anim.frame)
         if frame is None:
-            frame = anm2.render()
-            cache[anm2.frame] = frame
+            frame = anim.render()
+            cache[anim.frame] = frame
 
         return frame
 
@@ -433,7 +548,7 @@ class RoomScene(QGraphicsScene):
         # Grey out the screen to show it's inactive if there are no rooms selected
         if mainWindow.roomList.selectedRoom() is None:
             b = QBrush(QColor(255, 255, 255, 100))
-            painter.setPen(Qt.white)
+            painter.setPen(QColorConstants.White)
             painter.setBrush(b)
 
             painter.fillRect(rect, b)
@@ -444,9 +559,6 @@ class RoomScene(QGraphicsScene):
 
         gs = 26
 
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-
         white = QColor.fromRgb(255, 255, 255, 100)
         bad = QColor.fromRgb(100, 255, 255, 100)
 
@@ -456,11 +568,11 @@ class RoomScene(QGraphicsScene):
         for y in range(self.roomHeight):
             for x in range(self.roomWidth):
                 if self.roomInfo.isInBounds(x, y):
-                    painter.setPen(QPen(white, 1, Qt.DashLine))
+                    painter.setPen(QPen(white, 1, Qt.PenStyle.DashLine))
                 else:
                     if not showOutOfBounds:
                         continue
-                    painter.setPen(QPen(bad, 1, Qt.DashLine))
+                    painter.setPen(QPen(bad, 1, Qt.PenStyle.DashLine))
 
                 painter.drawLine(x * gs, y * gs, (x + 1) * gs, y * gs)
                 painter.drawLine(x * gs, (y + 1) * gs, (x + 1) * gs, (y + 1) * gs)
@@ -477,7 +589,7 @@ class RoomScene(QGraphicsScene):
                     painter.drawText(x * gs + 2, y * gs + 24, f"{x - 1},{y - 1}")
 
         # Draw Walls (Debug)
-        # painter.setPen(QPen(Qt.green, 5, Qt.SolidLine))
+        # painter.setPen(QPen(QColorConstants.Green, 5, Qt.PenStyle.SolidLine))
         # h = gs / 2
         # walls = self.roomInfo.shapeData['Walls']
         # for wMin, wMax, wLvl, wDir in walls['X']:
@@ -504,6 +616,8 @@ class RoomScene(QGraphicsScene):
 
         gfxData = xmlLookups.getGfxData(roomBG)
         self.bgState.append(gfxData)
+
+        self.loadAnims()
 
         roomBG = gfxData["Paths"]
 
@@ -574,7 +688,7 @@ class RoomEditorWidget(QGraphicsView):
         self.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
         self.setDragMode(QGraphicsView.RubberBandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorViewCenter)
-        self.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.setAcceptDrops(True)
 
         self.assignNewScene(scene)
@@ -659,7 +773,7 @@ class RoomEditorWidget(QGraphicsView):
         mainWindow.dirt()
 
     def mousePressEvent(self, event):
-        if event.buttons() == Qt.RightButton:
+        if event.buttons() == Qt.MouseButton.RightButton:
             if mainWindow.roomList.selectedRoom() is not None:
                 self.lastTile = set()
                 self.tryToPaint(event)
@@ -681,7 +795,7 @@ class RoomEditorWidget(QGraphicsView):
         QGraphicsView.mouseReleaseEvent(self, event)
 
     def keyPressEvent(self, event):
-        if self.canDelete and (event.key() == Qt.Key_Delete):
+        if self.canDelete and (event.key() == Qt.Key.Key_Delete):
             scene = self.scene()
             selection = scene.selectedItems()
 
@@ -716,9 +830,11 @@ class RoomEditorWidget(QGraphicsView):
         self.setTransform(tr)
 
         if newScale == yScale:
-            self.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+            self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         else:
-            self.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            self.setAlignment(
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+            )
 
     def calculateTotalHP(self, baseHP, stageHP, stageNum):
         totalHP = round(
@@ -742,16 +858,14 @@ class RoomEditorWidget(QGraphicsView):
         painter = QPainter()
         painter.begin(self.viewport())
 
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-        painter.setPen(QPen(Qt.white, 1, Qt.SolidLine))
+        painter.setPen(QPen(QColorConstants.White, 1, Qt.PenStyle.SolidLine))
 
         room = mainWindow.roomList.selectedRoom()
         if room:
             # Room Type Icon
-            roomTypes = xmlLookups.roomTypes.lookup(room=room, showInMenu=True)
-            if len(roomTypes) > 0:
-                q = QPixmap(roomTypes[0].get("Icon"))
+            roomType = xmlLookups.roomTypes.lookupOne(room=room, showInMenu=True)
+            if roomType is not None:
+                q = QPixmap(roomType.get("Icon"))
                 painter.drawPixmap(2, 3, q)
             else:
                 printf("Warning: Unknown room type during paintEvent:", room.getDesc())
@@ -791,8 +905,8 @@ class RoomEditorWidget(QGraphicsView):
                 2,
                 400,
                 16,
-                int(Qt.AlignRight | Qt.AlignBottom),
-                f"{e.entity.Type}.{e.entity.Variant}.{e.entity.Subtype} - {e.entity.config.name}",
+                int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom),
+                str(e),
             )
 
             # Bottom Text
@@ -807,7 +921,7 @@ class RoomEditorWidget(QGraphicsView):
                     textY,
                     400,
                     12,
-                    int(Qt.AlignRight | Qt.AlignBottom),
+                    int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom),
                     "Tags: " + tags,
                 )
                 textY += 16
@@ -817,7 +931,7 @@ class RoomEditorWidget(QGraphicsView):
                 textY,
                 200,
                 12,
-                int(Qt.AlignRight | Qt.AlignBottom),
+                int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom),
                 f"Base HP : {e.entity.config.baseHP}",
             )
             textY += 16
@@ -828,7 +942,7 @@ class RoomEditorWidget(QGraphicsView):
                     textY,
                     200,
                     12,
-                    int(Qt.AlignRight | Qt.AlignBottom),
+                    int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom),
                     f"Stage HP : {e.entity.config.stageHP}",
                 )
                 textY += 16
@@ -847,7 +961,7 @@ class RoomEditorWidget(QGraphicsView):
                     textY,
                     200,
                     12,
-                    int(Qt.AlignRight | Qt.AlignBottom),
+                    int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom),
                     f"Total HP : {totalHP}",
                 )
                 textY += 16
@@ -858,7 +972,7 @@ class RoomEditorWidget(QGraphicsView):
                     textY,
                     200,
                     12,
-                    int(Qt.AlignRight | Qt.AlignBottom),
+                    int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom),
                     f"Armor : {e.entity.config.armor}",
                 )
 
@@ -879,7 +993,7 @@ class RoomEditorWidget(QGraphicsView):
                 2,
                 200,
                 16,
-                int(Qt.AlignRight | Qt.AlignBottom),
+                int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom),
                 f"{len(selectedEntities)} Entities Selected",
             )
 
@@ -892,7 +1006,7 @@ class RoomEditorWidget(QGraphicsView):
                 20,
                 200,
                 12,
-                int(Qt.AlignRight | Qt.AlignBottom),
+                int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom),
                 ", ".join(
                     set([x.entity.config.name or "INVALID" for x in selectedEntities])
                 ),
@@ -904,9 +1018,6 @@ class RoomEditorWidget(QGraphicsView):
 
     def drawForeground(self, painter, rect):
         QGraphicsView.drawForeground(self, painter, rect)
-
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
 
         # Display the number of entities on a given tile, in bitFont or regular font
         tiles = [
@@ -920,7 +1031,7 @@ class RoomEditorWidget(QGraphicsView):
         useAliased = settings.value("BitfontEnabled") == "0"
 
         if useAliased:
-            painter.setPen(Qt.white)
+            painter.setPen(QColorConstants.White)
             painter.font().setPixelSize(5)
 
         for y, row in enumerate(tiles):
@@ -946,19 +1057,19 @@ class RoomEditorWidget(QGraphicsView):
                         )
                 else:
                     if count == EntityStack.MAX_STACK_DEPTH:
-                        painter.setPen(Qt.red)
+                        painter.setPen(QColorConstants.Red)
 
                     painter.drawText(
                         x * 26,
                         y * 26,
                         26,
                         26,
-                        int(Qt.AlignBottom | Qt.AlignRight),
+                        int(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight),
                         str(count),
                     )
 
                     if count == EntityStack.MAX_STACK_DEPTH:
-                        painter.setPen(Qt.white)
+                        painter.setPen(QColorConstants.White)
 
 
 class Entity(QGraphicsItem):
@@ -991,11 +1102,19 @@ class Entity(QGraphicsItem):
 
             self.getEntityInfo(t, v, s)
 
+        def __str__(self):
+            return EntityData.toString(
+                self.Type,
+                self.Variant,
+                self.Subtype,
+                self.config.name if self.config else None,
+            )
+
         def getEntityInfo(self, entitytype, variant, subtype):
             self.config = xmlLookups.entities.lookupOne(entitytype, variant, subtype)
             if self.config is None:
                 printf(
-                    f"'Could not find Entity {entitytype}.{variant}.{subtype} for in-editor, using ?"
+                    f"'Could not find Entity {EntityData.toString(entitytype, variant, subtype)} for in-editor, using ?"
                 )
 
                 self.pixmap = QPixmap("resources/Entities/questionmark.png")
@@ -1014,12 +1133,10 @@ class Entity(QGraphicsItem):
                 entitytype == EntityType["PICKUP"]
                 and variant == PickupVariant["COLLECTIBLE"]
             ):
-                i = QImage()
-                i.load("resources/Entities/5.100.0 - Collectible.png")
+                i = anm2.loadImage("resources/Entities/5.100.0 - Collectible.png")
                 i = i.convertToFormat(QImage.Format_ARGB32)
 
-                d = QImage()
-                d.load(self.imgPath)
+                d = anm2.loadImage(self.imgPath)
 
                 p = QPainter(i)
                 p.drawImage(0, 0, d)
@@ -1053,7 +1170,7 @@ class Entity(QGraphicsItem):
             value = self.getBitfieldValue(bitfield)
             if not isinstance(value, int):
                 printf(
-                    f"Entity {self.config.name} ({self.config.type}.{self.config.variant}.{self.config.subtype}) has an invalid bitfield Key {bitfield.key}"
+                    f"Entity {self.config} has an invalid bitfield Key {bitfield.key}"
                 )
                 self.config.invalidBitfield = True
             else:
@@ -1094,14 +1211,19 @@ class Entity(QGraphicsItem):
         self.updatePosition()
 
         if not hasattr(Entity, "SELECTION_PEN"):
-            Entity.SELECTION_PEN = QPen(Qt.green, 1, Qt.DashLine)
-            Entity.OFFSET_SELECTION_PEN = QPen(Qt.red, 1, Qt.DashLine)
+            Entity.SELECTION_PEN = QPen(QColorConstants.Green, 1, Qt.PenStyle.DashLine)
+            Entity.OFFSET_SELECTION_PEN = QPen(
+                QColorConstants.Red, 1, Qt.PenStyle.DashLine
+            )
             Entity.INVALID_ERROR_IMG = QPixmap("resources/UI/ent-error.png")
             Entity.OUT_OF_RANGE_WARNING_IMG = QPixmap("resources/UI/ent-warning.png")
 
         self.setAcceptHoverEvents(True)
 
         self.respawning = False
+
+    def __str__(self):
+        return str(self.entity)
 
     def setData(self, t, v, s):
         self.entity.changeTo(t, v, s)
@@ -1111,12 +1233,10 @@ class Entity(QGraphicsItem):
         e = self.entity
         tooltipStr = ""
         if e.known:
-            tooltipStr = f"{e.config.name} @ {e.x-1} x {e.y-1} - {e.Type}.{e.Variant}.{e.Subtype}; HP: {e.config.baseHP}"
+            tooltipStr = f"{e.config} @ {e.x-1} x {e.y-1}; HP: {e.config.baseHP}"
             tooltipStr += e.config.getEditorWarnings()
         else:
-            tooltipStr = (
-                f"Missing @ {e.x-1} x {e.y-1} - {e.Type}.{e.Variant}.{e.Subtype}"
-            )
+            tooltipStr = f"Missing @ {e.x-1} x {e.y-1} - {e}"
             tooltipStr += (
                 "\nMissing BR entry! Trying to spawn this entity might CRASH THE GAME!!"
             )
@@ -1199,12 +1319,13 @@ class Entity(QGraphicsItem):
     RockAnm2 = anm2.Config("resources/Backgrounds/RockGrid.anm2", "resources")
     RockAnm2.setAnimation()
 
-    def getPitFrame(self, pitImg, rendered):
+    def getPitFrame(self, pitImg, rendered, extraConnections: "list|None"):
         def matchInStack(stack):
             for ent in stack:
                 img = ent.getCurrentImg()
 
-                if img == pitImg:
+                # printf(f"DEBUG: extraConnections is {extraConnections}, {extraConnections and img in extraConnections}")
+                if img == pitImg or (extraConnections and img in extraConnections):
                     return True
 
             return False
@@ -1443,7 +1564,7 @@ class Entity(QGraphicsItem):
             if self.entity.config.hasBitfieldKey("Variant"):
                 variant = 0
 
-        entID = f"{self.entity.Type}.{variant}.{subtype}"
+        entID = EntityData.toString(self.entity.Type, variant, subtype)
 
         return gfxData["Entities"].get(entID)
 
@@ -1452,11 +1573,8 @@ class Entity(QGraphicsItem):
         return self.entity.imgPath if override is None else override.get("Image")
 
     def paint(self, painter, option, widget):
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-
-        painter.setBrush(Qt.Dense5Pattern)
-        painter.setPen(QPen(Qt.white))
+        painter.setBrush(Qt.BrushStyle.Dense5Pattern)
+        painter.setPen(QPen(QColorConstants.White))
 
         if self.entity.pixmap:
             xc, yc = 0, 0
@@ -1551,7 +1669,9 @@ class Entity(QGraphicsItem):
                 painter.drawLine(26, 26, 26, 22)
 
             if self.entity.config.renderPit:
-                Entity.PitAnm2.frame = self.getPitFrame(imgPath, rendered)
+                Entity.PitAnm2.frame = self.getPitFrame(
+                    imgPath, rendered, self.entity.config.renderPitExtraConnections
+                )
                 Entity.PitAnm2.spritesheets[0] = rendered
                 rendered = self.scene().getFrame(imgPath + " - pit", Entity.PitAnm2)
                 renderFunc = painter.drawImage
@@ -1576,20 +1696,24 @@ class Entity(QGraphicsItem):
                 abs(1 - yc) > 0.5 or abs(1 - xc) > 0.5
             ):
                 painter.setPen(self.OFFSET_SELECTION_PEN)
-                painter.setBrush(Qt.NoBrush)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawLine(13, 13, int(x + width / 2), y + height - 13)
                 drawGridBorders()
                 painter.fillRect(
-                    int(x + width / 2 - 3), y + height - 13 - 3, 6, 6, Qt.red
+                    int(x + width / 2 - 3),
+                    y + height - 13 - 3,
+                    6,
+                    6,
+                    QColorConstants.Red,
                 )
 
             if self.isSelected():
                 painter.setPen(self.SELECTION_PEN)
-                painter.setBrush(Qt.NoBrush)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawRect(x, y, width, height)
 
                 # Grid space boundary
-                painter.setPen(Qt.green)
+                painter.setPen(QColorConstants.Green)
                 drawGridBorders()
 
             if self.entity.overlaypixmap:
@@ -1623,7 +1747,7 @@ class Entity(QGraphicsItem):
     def mouseReleaseEvent(self, event):
         e = self.entity
         if (
-            event.button() == Qt.MiddleButton
+            event.button() == Qt.MouseButton.MiddleButton
             and e.config.hasBitfields
             and not e.config.invalidBitfield
         ):
@@ -1639,7 +1763,7 @@ class Entity(QGraphicsItem):
 
     def getStack(self):
         # Get the stack
-        stack = self.collidingItems(Qt.IntersectsItemBoundingRect)
+        stack = self.collidingItems(Qt.ItemSelectionMode.IntersectsItemBoundingRect)
         stack.append(self)
 
         # Make sure there are no doors or popups involved
@@ -1693,7 +1817,7 @@ class EntityMenu(QWidget):
         self.list.setViewMode(self.list.ListMode)
         self.list.setSelectionMode(self.list.ExtendedSelection)
         self.list.setResizeMode(self.list.Adjust)
-        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
         cursor = QCursor()
         self.customContextMenu(cursor.pos())
@@ -1800,7 +1924,7 @@ class EntityMenu(QWidget):
                     widget.addItem(item)
                 widget.setCurrentIndex(self.getWidgetValue(bitfieldElement))
             elif bitfieldElement.widget == "slider":
-                widget = QSlider(Qt.Horizontal)
+                widget = QSlider(Qt.Orientation.Horizontal)
                 minimum, maximum = bitfieldElement.getWidgetRange()
                 widget.setRange(minimum, maximum)
                 widget.setValue(self.getWidgetValue(bitfieldElement))
@@ -1851,14 +1975,14 @@ class EntityStack(QGraphicsItem):
             self.setDecimals(2)
             self.setSingleStep(0.1)
             self.setFrame(False)
-            self.setAlignment(Qt.AlignHCenter)
+            self.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
             self.setFont(QFont("Arial", 10))
 
             palette = self.palette()
-            palette.setColor(QPalette.Base, Qt.transparent)
-            palette.setColor(QPalette.Text, Qt.white)
-            palette.setColor(QPalette.Window, Qt.transparent)
+            palette.setColor(QPalette.Base, QColorConstants.Transparent)
+            palette.setColor(QPalette.Text, QColorConstants.White)
+            palette.setColor(QPalette.Window, QColorConstants.Transparent)
 
             self.setPalette(palette)
             self.setButtonSymbols(QAbstractSpinBox.NoButtons)
@@ -1906,11 +2030,9 @@ class EntityStack(QGraphicsItem):
             self.items[idx].entity.weight = self.spinners[idx].widget().value()
 
     def paint(self, painter, option, widget):
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
 
         brush = QBrush(QColor(0, 0, 0, 80))
-        painter.setPen(QPen(Qt.transparent))
+        painter.setPen(QPen(QColorConstants.Transparent))
         painter.setBrush(brush)
 
         r = self.boundingRect().adjusted(0, 0, 0, -16)
@@ -1922,7 +2044,7 @@ class EntityStack(QGraphicsItem):
         path.lineTo(r.center().x(), r.bottom() + 12)
         painter.drawPath(path)
 
-        painter.setPen(QPen(Qt.white))
+        painter.setPen(QPen(QColorConstants.White))
         painter.setFont(QFont("Arial", 8))
 
         w = 0
@@ -1932,7 +2054,7 @@ class EntityStack(QGraphicsItem):
             w += 4
             painter.drawPixmap(int(w), int(r.bottom() - 20 - pix.height()), pix)
 
-            # painter.drawText(w, r.bottom()-16, pix.width(), 8, Qt.AlignCenter, "{:.1f}".format(item.entity.weight))
+            # painter.drawText(w, r.bottom()-16, pix.width(), 8, Qt.AlignmentFlag.AlignCenter, "{:.1f}".format(item.entity.weight))
             w += pix.width()
 
     def boundingRect(self):
@@ -1999,8 +2121,10 @@ class Door(QGraphicsItem):
             self.moveBy(0, -13)
 
         if not Door.Image:
-            Door.Image = QImage("resources/Backgrounds/Door.png")
-            Door.DisabledImage = QImage("resources/Backgrounds/DisabledDoor.png")
+            Door.Image = anm2.loadImage("resources/Backgrounds/Door.png")
+            Door.DisabledImage = anm2.loadImage(
+                "resources/Backgrounds/DisabledDoor.png"
+            )
 
         self.image = Door.Image.transformed(tr)
         self.disabledImage = Door.DisabledImage.transformed(tr)
@@ -2014,9 +2138,6 @@ class Door(QGraphicsItem):
         self.doorItem[2] = val
 
     def paint(self, painter, option, widget):
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-
         if self.exists:
             painter.drawImage(0, 0, self.image)
         else:
@@ -2338,7 +2459,7 @@ class Room(QListWidgetItem):
         self.xmlProps = {}
         self._lastTestTime = None
 
-        self.setFlags(self.flags() | Qt.ItemIsEditable)
+        self.setFlags(self.flags() | Qt.ItemFlag.ItemIsEditable)
         self.setToolTip()
 
         self.renderDisplayIcon()
@@ -2350,28 +2471,29 @@ class Room(QListWidgetItem):
     @difficulty.setter
     def difficulty(self, d):
         self._difficulty = d
-        if d == 20:
+        version = getGameVersion()
+        if version in ["Repentance", "Repentance+"] and d == 20:
             self.setForeground(QColor(190, 0, 255))
         else:
             self.setForeground(QColor.fromHsvF(1, 1, min(max(d / 15, 0), 1), 1))
 
     @property
     def name(self):
-        return self.data(Qt.UserRole)
+        return self.data(Qt.ItemDataRole.UserRole)
 
     @name.setter
     def name(self, n):
-        self.setData(Qt.UserRole, n)
+        self.setData(Qt.ItemDataRole.UserRole, n)
         self.setText(f"{self.info.variant} - {n}")
         self.seed = hash(n)
 
     @property
     def isCurrent(self):
-        return self.data(Qt.UserRole + 100)
+        return self.data(Qt.ItemDataRole.UserRole + 100)
 
     @isCurrent.setter
     def isCurrent(self, s):
-        self.setData(Qt.UserRole + 100, s)
+        self.setData(Qt.ItemDataRole.UserRole + 100, s)
 
     @property
     def gridSpawns(self):
@@ -2424,11 +2546,7 @@ class Room(QListWidgetItem):
         self.gridSpawns = newGridSpawns
 
     def getDesc(self):
-        name = self.name
-        difficulty = self.difficulty
-        weight = self.weight
-        info = self.info
-        return f"{name} ({info.type}.{info.variant}.{info.subtype}) ({info.width-2}x{info.height-2}) - Difficulty: {difficulty}, Weight: {weight}, Shape: {info.shape}"
+        return RoomData.getDesc(self.info, self.name, self.difficulty, self.weight)
 
     def setToolTip(self):
         self.setText(f"{self.info.variant} - {self.name}")
@@ -2446,14 +2564,14 @@ class Room(QListWidgetItem):
     def renderDisplayIcon(self):
         """Renders the mini-icon for display."""
 
-        roomTypes = xmlLookups.roomTypes.lookup(room=self, showInMenu=True)
-        if len(roomTypes) == 0:
+        roomType = xmlLookups.roomTypes.lookupOne(room=self, showInMenu=True)
+        if roomType is None:
             printf(
                 "Warning: Unknown room type during renderDisplayIcon:", self.getDesc()
             )
             return
 
-        i = QIcon(roomTypes[0].get("Icon"))
+        i = anm2.loadIcon(roomType.get("Icon"))
         self.setIcon(i)
 
     class _SpawnIter:
@@ -2489,9 +2607,8 @@ class Room(QListWidgetItem):
             self.roomBG = val
             return
 
-        matchPath = mainWindow.path and os.path.split(mainWindow.path)[1]
         self.roomBG = xmlLookups.getRoomGfx(
-            room=self, roomfile=mainWindow.roomList.file, path=matchPath
+            room=self, roomfile=mainWindow.roomList.file, path=mainWindow.path
         )
 
     def mirrorX(self):
@@ -2627,11 +2744,17 @@ class RoomDelegate(QStyledItemDelegate):
     ) -> None:
         room = mainWindow.roomList.list.item(index.row())
         room.name = editor.text()
+        room.setRoomBG()
+        mainWindow.scene.update()
         mainWindow.dirt()
 
     def paint(self, painter, option, index):
         painter.fillRect(
-            option.rect.right() - 19, option.rect.top(), 17, 16, QBrush(Qt.white)
+            option.rect.right() - 19,
+            option.rect.top(),
+            17,
+            16,
+            QBrush(QColorConstants.White),
         )
 
         QStyledItemDelegate.paint(self, painter, option, index)
@@ -2657,11 +2780,26 @@ class FilterMenu(QMenu):
                 rect.top() - 2,
                 24,
                 24,
-                QBrush(Qt.transparent),
+                QBrush(QColorConstants.Transparent),
             )
             painter.drawPixmap(
                 int(rect.right() / 2 - 12), rect.top() - 2, act.icon().pixmap(24, 24)
             )
+
+
+# Fixes this bug in Qt5: https://forum.qt.io/topic/150150/drag-dropping-last-index-item-of-a-qlistwidget-removes-its-contents/3?_=1738105058219&lang=en-US
+class RoomSelectorList(QListWidget):
+    def __init__(self):
+        QListWidget.__init__(self)
+
+    def dragMoveEvent(self, e):
+        if (self.row(self.itemAt(e.pos())) == self.currentRow() + 1) or (
+            self.currentRow() == self.count() - 1
+            and self.row(self.itemAt(e.pos())) == -1
+        ):
+            e.ignore()
+        else:
+            super().dragMoveEvent(e)
 
 
 class RoomSelector(QWidget):
@@ -2692,8 +2830,7 @@ class RoomSelector(QWidget):
         self.filter = QGridLayout()
         self.filter.setSpacing(4)
 
-        fq = QImage()
-        fq.load("resources/UI/FilterIcons.png")
+        fq = anm2.loadImage("resources/UI/FilterIcons.png")
 
         # Set the custom data
         self.filter.typeData = -1
@@ -2727,27 +2864,27 @@ class RoomSelector(QWidget):
         self.entityToggle.setIcon(QIcon(QPixmap.fromImage(fq.copy(0, 0, 24, 24))))
 
         # Type Toggle Button
-        self.typeToggle = QToolButton()
-        self.typeToggle.setIconSize(QSize(24, 24))
-        self.typeToggle.setPopupMode(QToolButton.InstantPopup)
+        self.roomTypeToggle = QToolButton()
+        self.roomTypeToggle.setIconSize(QSize(24, 24))
+        self.roomTypeToggle.setPopupMode(QToolButton.InstantPopup)
 
-        typeMenu = QMenu()
+        roomTypeMenu = QMenu()
 
-        self.typeToggle.setIcon(
+        self.roomTypeToggle.setIcon(
             QIcon(QPixmap.fromImage(fq.copy(1 * 24 + 4, 4, 16, 16)))
         )
-        act = typeMenu.addAction(
+        act = roomTypeMenu.addAction(
             QIcon(QPixmap.fromImage(fq.copy(1 * 24 + 4, 4, 16, 16))), ""
         )
-        act.setData(-1)
-        self.typeToggle.setDefaultAction(act)
+        act.setData(None)
+        self.roomTypeToggle.setDefaultAction(act)
 
-        for iconType in xmlLookups.roomTypes.lookup(showInMenu=True):
-            act = typeMenu.addAction(QIcon(iconType.get("Icon")), "")
-            act.setData(int(iconType.get("Type")))
+        for roomType in xmlLookups.roomTypes.lookup(showInMenu=True):
+            act = roomTypeMenu.addAction(anm2.loadIcon(roomType.get("Icon")), "")
+            act.setData(roomType)
 
-        self.typeToggle.triggered.connect(self.setTypeFilter)
-        self.typeToggle.setMenu(typeMenu)
+        self.roomTypeToggle.triggered.connect(self.setRoomTypeFilter)
+        self.roomTypeToggle.setMenu(roomTypeMenu)
 
         # Weight Toggle Button
         class ExtraFilterToggle(QToolButton):
@@ -2757,7 +2894,7 @@ class RoomSelector(QWidget):
             rightClicked = pyqtSignal()
 
             def mousePressEvent(self, e):
-                if e.buttons() == Qt.RightButton:
+                if e.buttons() == Qt.MouseButton.RightButton:
                     self.rightClicked.emit()
                 else:
                     self.clicked.emit()
@@ -2779,8 +2916,7 @@ class RoomSelector(QWidget):
 
         sizeMenu = FilterMenu()
 
-        q = QImage()
-        q.load("resources/UI/ShapeIcons.png")
+        q = anm2.loadImage("resources/UI/ShapeIcons.png")
 
         self.sizeToggle.setIcon(QIcon(QPixmap.fromImage(fq.copy(3 * 24, 0, 24, 24))))
         act = sizeMenu.addAction(
@@ -2804,7 +2940,7 @@ class RoomSelector(QWidget):
         self.filter.addWidget(QLabel("Filter by:"), 0, 0)
         self.filter.addWidget(self.IDFilter, 0, 1)
         self.filter.addWidget(self.entityToggle, 0, 2)
-        self.filter.addWidget(self.typeToggle, 0, 3)
+        self.filter.addWidget(self.roomTypeToggle, 0, 3)
         self.filter.addWidget(self.sizeToggle, 0, 4)
         self.filter.addWidget(self.extraToggle, 0, 5)
         self.filter.setContentsMargins(4, 0, 0, 4)
@@ -2852,11 +2988,11 @@ class RoomSelector(QWidget):
         self.filter.addWidget(self.clearExtra, 1, 5)
 
     def setupList(self):
-        self.list = QListWidget()
+        self.list = RoomSelectorList()
         self.list.setViewMode(self.list.ListMode)
         self.list.setSelectionMode(self.list.ExtendedSelection)
         self.list.setResizeMode(self.list.Adjust)
-        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
 
         self.list.setAutoScroll(True)
         self.list.setDragEnabled(True)
@@ -2929,23 +3065,25 @@ class RoomSelector(QWidget):
         menu = QMenu(self.list)
 
         # Type
-        Type = QWidgetAction(menu)
+        roomType = QWidgetAction(menu)
         c = QComboBox()
 
         global xmlLookups
-        types = xmlLookups.roomTypes.lookup(showInMenu=True)
-        matchingTypes = xmlLookups.roomTypes.lookup(
+        roomTypes = xmlLookups.roomTypes.lookup(showInMenu=True)
+        matchingRoomTypes = xmlLookups.roomTypes.lookup(
             room=self.selectedRoom(), showInMenu=True
         )
 
-        for i, t in enumerate(types):
-            c.addItem(QIcon(t.get("Icon")), t.get("Name"))
-            if t in matchingTypes:
+        for i, rt in enumerate(roomTypes):
+            c.addItem(anm2.loadIcon(rt.get("Icon")), rt.get("Name"))
+            if rt in matchingRoomTypes:
                 c.setCurrentIndex(i)
 
-        c.currentIndexChanged.connect(self.changeType)
-        Type.setDefaultWidget(c)
-        menu.addAction(Type)
+        c.currentIndexChanged.connect(
+            lambda index: self.changeRoomType(roomTypes[index])
+        )
+        roomType.setDefaultWidget(c)
+        menu.addAction(roomType)
 
         # Variant
         Variant = QWidgetAction(menu)
@@ -3002,8 +3140,7 @@ class RoomSelector(QWidget):
         Shape = QWidgetAction(menu)
         c = QComboBox()
 
-        q = QImage()
-        q.load("resources/UI/ShapeIcons.png")
+        q = anm2.loadImage("resources/UI/ShapeIcons.png")
 
         for shapeName in range(1, 13):
             c.addItem(
@@ -3023,7 +3160,7 @@ class RoomSelector(QWidget):
         self.IDFilter.clear()
         self.entityToggle.setChecked(False)
         self.filter.typeData = -1
-        self.typeToggle.setIcon(self.typeToggle.defaultAction().icon())
+        self.roomTypeToggle.setIcon(self.roomTypeToggle.defaultAction().icon())
         self.filter.sizeData = -1
         self.sizeToggle.setIcon(self.sizeToggle.defaultAction().icon())
 
@@ -3041,7 +3178,7 @@ class RoomSelector(QWidget):
 
     def clearTypeFilter(self):
         self.filter.typeData = -1
-        self.typeToggle.setIcon(self.typeToggle.defaultAction().icon())
+        self.roomTypeToggle.setIcon(self.roomTypeToggle.defaultAction().icon())
         self.changeFilter()
 
     def clearExtraFilter(self):
@@ -3058,9 +3195,25 @@ class RoomSelector(QWidget):
         self.entityToggle.checked = checked
 
     # @pyqtSlot(QAction)
-    def setTypeFilter(self, action):
-        self.filter.typeData = action.data()
-        self.typeToggle.setIcon(action.icon())
+    def setRoomTypeFilter(self, action):
+        room = action.data()
+
+        if room is None:
+            self.filter.typeData = -1
+        else:
+            Type = room.get("Type")
+            if Type is not None:
+                self.filter.typeData = int(Type)
+            # ID = room.get("ID")
+            # if ID is not None:
+            #     self.filter.typeData = int(ID)
+            Subtype = room.get("Subtype")
+            if Subtype is not None:
+                self.filter.extraData["subtype"]["enabled"] = True
+                self.filter.extraData["subtype"]["min"] = int(Subtype)
+                self.filter.extraData["enabled"] = True
+
+        self.roomTypeToggle.setIcon(action.icon())
         self.changeFilter()
 
     # @pyqtSlot(QAction)
@@ -3311,9 +3464,25 @@ class RoomSelector(QWidget):
         mainWindow.dirt()
 
     # @pyqtSlot(int)
-    def changeType(self, index):
+    def changeRoomType(self, roomType):
+        Type = roomType.get("Type")
+        if Type is not None:
+            Type = int(Type)
+        # ignore ID for now
+        # ID = roomType.get("ID")
+        # if ID is not None:
+        #     ID = int(ID)
+        Subtype = roomType.get("Subtype")
+        if Subtype is not None:
+            Subtype = int(Subtype)
         for r in self.selectedRooms():
-            r.info.type = index
+            if Type is not None:
+                r.info.type = Type
+            # if ID is not None:
+            #     r.info.variant = ID
+            if Subtype is not None:
+                r.info.subtype = Subtype
+
             r.renderDisplayIcon()
             r.setRoomBG()
 
@@ -3327,17 +3496,19 @@ class RoomSelector(QWidget):
     def changeVariant(self, var):
         for r in self.selectedRooms():
             r.info.variant = var
+            r.setRoomBG()
             r.setToolTip()
-        mainWindow.dirt()
         mainWindow.scene.update()
+        mainWindow.dirt()
 
     # @pyqtSlot(int)
     def changeSubtype(self, var):
         for r in self.selectedRooms():
             r.info.subtype = var
+            r.setRoomBG()
             r.setToolTip()
-        mainWindow.dirt()
         mainWindow.scene.update()
+        mainWindow.dirt()
 
     # @pyqtSlot(QAction)
     def changeDifficulty(self, var):
@@ -3359,7 +3530,7 @@ class RoomSelector(QWidget):
     def keyPressEvent(self, event):
         self.list.keyPressEvent(event)
 
-        if event.key() == Qt.Key_Delete or event.key() == Qt.Key_Backspace:
+        if event.key() == Qt.Key.Key_Delete or event.key() == Qt.Key.Key_Backspace:
             self.removeRoom()
 
     def addRoom(self):
@@ -3426,7 +3597,7 @@ class RoomSelector(QWidget):
             usedRoomName = room.name
             if extra in room.name and extra != "":
                 extraCount = room.name.count(extra)
-                regSearch = QRegularExpression(" \((\d*)\)")
+                regSearch = QRegularExpression(r" \((\d*)\)")
                 counterMatches = regSearch.match(room.name)
                 if counterMatches.hasMatch():
                     counter = counterMatches.captured(
@@ -3593,7 +3764,7 @@ class EntityGroupItem(QStandardItem):
 
         self.endIndex = endIndex
 
-        self.alignment = Qt.AlignCenter
+        self.alignment = Qt.AlignmentFlag.AlignCenter
 
         self.collapsed = False
 
@@ -3662,7 +3833,7 @@ class EntityItem(QStandardItem):
         self.ID = config.type
         self.variant = config.variant
         self.subtype = config.subtype
-        self.icon = QIcon(config.imagePath)
+        self.icon = anm2.loadIcon(config.imagePath)
         self.config = config
 
         self.setToolTip(self.name)
@@ -3688,14 +3859,14 @@ class EntityGroupModel(QAbstractListModel):
         item = self.getItem(index.row())
 
         if isinstance(item, EntityGroupItem):
-            return Qt.ItemIsEnabled
+            return Qt.ItemFlag.ItemIsEnabled
         else:
-            return Qt.ItemIsEnabled | Qt.ItemIsSelectable
+            return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
 
     def getItem(self, index):
         return self.group.getItem(index)
 
-    def data(self, index, role=Qt.DisplayRole):
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         # Should return the contents of a row when asked for the index
         #
         # Can be optimized by only dealing with the roles we need prior
@@ -3704,11 +3875,11 @@ class EntityGroupModel(QAbstractListModel):
         if (role > 1) and (role < 6):
             return None
 
-        elif role == Qt.ForegroundRole:
+        elif role == Qt.ItemDataRole.ForegroundRole:
             return QBrush(Qt.black)
 
-        elif role == Qt.TextAlignmentRole:
-            return Qt.AlignCenter
+        elif role == Qt.ItemDataRole.TextAlignmentRole:
+            return Qt.AlignmentFlag.AlignCenter
 
         if not index.isValid():
             return None
@@ -3721,38 +3892,36 @@ class EntityGroupModel(QAbstractListModel):
 
         item = self.getItem(n)
 
-        if role == Qt.DecorationRole:
+        if role == Qt.ItemDataRole.DecorationRole:
             if isinstance(item, EntityItem):
                 return item.icon
 
         if (
-            role == Qt.ToolTipRole
-            or role == Qt.StatusTipRole
-            or role == Qt.WhatsThisRole
+            role == Qt.ItemDataRole.ToolTipRole
+            or role == Qt.ItemDataRole.StatusTipRole
+            or role == Qt.ItemDataRole.WhatsThisRole
         ):
             if isinstance(item, EntityItem):
                 return "{0}".format(item.name)
 
-        elif role == Qt.DisplayRole:
+        elif role == Qt.ItemDataRole.DisplayRole:
             if isinstance(item, EntityGroupItem):
                 return item.name + (" ▶" if item.collapsed else "")
 
-        elif role == Qt.SizeHintRole:
+        elif role == Qt.ItemDataRole.SizeHintRole:
             if isinstance(item, EntityGroupItem):
                 return QSize(self.view.viewport().width(), 24)
 
-        elif role == Qt.BackgroundRole:
+        elif role == Qt.ItemDataRole.BackgroundRole:
             if isinstance(item, EntityGroupItem):
                 colour = 165
-
-                if colour > 255:
-                    colour = 255
-
-                brush = QBrush(QColor(colour, colour, colour), Qt.Dense4Pattern)
+                brush = QBrush(
+                    QColor(colour, colour, colour), Qt.BrushStyle.Dense4Pattern
+                )
 
                 return brush
 
-        elif role == Qt.FontRole:
+        elif role == Qt.ItemDataRole.FontRole:
             font = QFont()
             font.setPixelSize(16)
             font.setBold(True)
@@ -3852,12 +4021,12 @@ class EntityPalette(QWidget):
         # holding ctrl skips the filter change step
         kb = int(QGuiApplication.keyboardModifiers())
 
-        holdCtrl = kb & Qt.ControlModifier != 0
+        holdCtrl = kb & Qt.KeyboardModifier.ControlModifier != 0
         pinEntityFilter = settings.value("PinEntityFilter") == "1"
         self.objChanged.emit(current, holdCtrl == pinEntityFilter)
 
         # Throws a signal when the selected object is used as a replacement
-        if kb & Qt.AltModifier != 0:
+        if kb & Qt.KeyboardModifier.AltModifier != 0:
             self.objReplaced.emit(current)
 
     # @pyqtSlot()
@@ -4001,6 +4170,275 @@ class ReplaceDialog(QDialog):
         layout.addLayout(cols)
         layout.addWidget(buttonBox)
         self.setLayout(layout)
+
+
+class PathsDialog(QDialog):
+    """Dialog for modifying path settings (InstallFolder, ResourceFolder, etc)."""
+
+    LABEL_MAX_WIDTH = 85
+    BUTTON_WIDTH = 25
+
+    class PathSetting:
+        """Representation of (and widgets for) a specific path setting (InstallFolder, ResourceFolder, etc) within the PathsDialog."""
+
+        def __init__(
+            self,
+            dialog,
+            labelText,
+            settingKey,
+            isFile=False,
+            tooltipText="",
+            getCurrentPathLambda=None,
+            getDefaultPathLambda=None,
+            disableLambda=None,
+        ):
+            self.dialog = dialog
+            self.settingKey = settingKey
+            self.isFile = isFile
+            self.getCurrentPathLambda = getCurrentPathLambda
+            self.getDefaultPathLambda = getDefaultPathLambda
+            self.disableLambda = disableLambda
+
+            # InstallFolder has special treatment for a few things.
+            self.isInstallFolder = self.settingKey in ["InstallFolder", "AntibirthPath"]
+
+            self.labelText = labelText
+            self.label = QLabel(self.labelText)
+            self.label.setToolTip(tooltipText)
+            self.label.setMaximumWidth(PathsDialog.LABEL_MAX_WIDTH)
+
+            self.textBox = QLineEdit()
+            self.textBox.setReadOnly(True)
+            self.textBox.setToolTip(tooltipText)
+
+            self.selectButton = QPushButton()
+            self.selectButton.setIcon(
+                self.dialog.style().standardIcon(QStyle.SP_DirIcon)
+            )
+            self.selectButton.setToolTip(
+                "Select " + ("file" if self.isFile else "folder")
+            )
+            self.selectButton.clicked.connect(lambda: self.selectNewPath())
+            self.selectButton.setFixedWidth(PathsDialog.BUTTON_WIDTH)
+
+            if not self.isInstallFolder:
+                self.resetButton = QPushButton()
+                self.resetButton.setIcon(
+                    self.dialog.style().standardIcon(QStyle.SP_TitleBarCloseButton)
+                )
+                self.resetButton.setToolTip("Reset to default")
+                self.resetButton.clicked.connect(lambda: self.setPath(None))
+                self.resetButton.setFixedWidth(PathsDialog.BUTTON_WIDTH)
+            else:
+                self.resetButton = None
+
+            self.layout = QHBoxLayout()
+            self.layout.addWidget(self.label, 1)
+            self.layout.addWidget(self.textBox, 1)
+            self.layout.addWidget(self.selectButton)
+            if self.resetButton:
+                self.layout.addWidget(self.resetButton)
+            else:
+                self.layout.addSpacing(PathsDialog.BUTTON_WIDTH + 6)
+
+            self.refresh()
+
+        def selectNewPath(self):
+            """Prompts the user to select a new folder/file."""
+            # Start the file dialog in the location of the current setting, or the install folder.
+            startDir = findInstallPath()
+            currentPath = self.getCurrentPath()
+            if QFile.exists(currentPath):
+                startDir = currentPath
+
+            path = ""
+            if self.isFile:
+                path, _ = QFileDialog.getOpenFileName(
+                    self.dialog,
+                    "Select " + self.labelText,
+                    startDir,
+                    "Executable files (*.exe)",
+                )
+            else:
+                path = QFileDialog.getExistingDirectory(
+                    self.dialog, "Select " + self.labelText, startDir
+                )
+
+            if path:
+                self.setPath(path)
+
+        def getCurrentPath(self):
+            """
+            Returns the current value for this path.
+            Doesn't just read from the setting in order to trigger the usual auto-detection.
+            """
+            if self.getCurrentPathLambda:
+                return os.path.normpath(self.getCurrentPathLambda())
+            return ""
+
+        def getDefaultPath(self):
+            """
+            Returns the "default" value for this path, relative to the current InstallPath.
+            Note: This value is never written to the settings. It is only used to determine if
+            the current setting is "customized" or not.
+            """
+            if self.getDefaultPathLambda:
+                return os.path.normpath(self.getDefaultPathLambda())
+            return ""
+
+        def hasCustomizedPath(self):
+            """Returns true if this path setting has been customized (IE, is set to something besides the default)."""
+            return QFile.exists(settings.value(self.settingKey)) and os.path.realpath(
+                self.getCurrentPath()
+            ) != os.path.realpath(self.getDefaultPath())
+
+        def refresh(self):
+            """Refreshes widget contents to accurately represent the current state."""
+            currentPath = self.getCurrentPath()
+
+            if self.isInstallFolder or self.hasCustomizedPath():
+                # For customized paths and the InstallFolder, display the path normally.
+                self.textBox.setPlaceholderText("")
+                self.textBox.setText(currentPath)
+            else:
+                # For non-customized, non-InstallFolder path settings, display as greyed out placeholder text.
+                self.textBox.clear()
+                self.textBox.setPlaceholderText(currentPath)
+
+            if self.disableLambda:
+                # Disable row contents if lambda returns true.
+                disable = self.disableLambda()
+                self.label.setEnabled(not disable)
+                self.textBox.setEnabled(not disable)
+                self.selectButton.setEnabled(not disable)
+                if self.resetButton:
+                    self.resetButton.setEnabled(
+                        not disable and self.hasCustomizedPath()
+                    )
+            elif self.resetButton:
+                self.resetButton.setEnabled(self.hasCustomizedPath())
+
+        def setPath(self, path):
+            """
+            Update the settings value and refresh widgets.
+            Setting to None will effectively revert it to the default value.
+            """
+            printf("setting", self.settingKey, "to", path)
+            if self.isInstallFolder:
+                # If the InstallFolder is reset, also reset all other non-customized paths.
+                for pathSetting in self.dialog.pathSettings:
+                    if (
+                        not pathSetting.isInstallFolder
+                        and not pathSetting.hasCustomizedPath()
+                    ):
+                        settings.remove(pathSetting.settingKey)
+
+            if not path:
+                settings.remove(self.settingKey)
+            else:
+                settings.setValue(self.settingKey, path)
+
+            if self.isInstallFolder:
+                # If the InstallFolder is reset, refresh everything.
+                for pathSetting in self.dialog.pathSettings:
+                    pathSetting.refresh()
+            else:
+                self.refresh()
+
+    def updateUrlLaunchCheckbox(self):
+        """Update the ForceUrlLaunch setting according to the checkbox, and refresh the widgets for the CustomExePath setting."""
+        if self.urlLaunchCheckbox:
+            settings.setValue(
+                "ForceUrlLaunch", "1" if self.urlLaunchCheckbox.isChecked() else "0"
+            )
+            if self.urlLaunchCheckbox.exePathSetting:
+                self.urlLaunchCheckbox.exePathSetting.refresh()
+
+    def __init__(self, parent):
+        super(QDialog, self).__init__(parent)
+
+        version = getGameVersion()
+
+        self.setWindowTitle("Set Paths")
+
+        # Remove the funny little question mark next to the close button.
+        self.setWindowFlags(
+            self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint
+        )
+
+        # Checkbox for the ForceUrlLaunch setting.
+        self.urlLaunchCheckbox = QCheckBox("Launch via Steam URL")
+        self.urlLaunchCheckbox.setChecked(settings.value("ForceUrlLaunch") == "1")
+        self.urlLaunchCheckbox.toggled.connect(lambda: self.updateUrlLaunchCheckbox())
+
+        # Create the widgets/logic for each path setting, in the order they're displayed.
+        # Note: The "default" values provided by the lambdas here are not used to populate
+        # the setting, they are used to determine if the current setting is customized.
+        self.pathSettings = [
+            PathsDialog.PathSetting(
+                dialog=self,
+                labelText="Install Folder",
+                settingKey=(
+                    "InstallFolder" if version != "Antibirth" else "AntibirthPath"
+                ),
+                tooltipText=f"Directory in which The Binding of Isaac: {version} is installed.",
+                getCurrentPathLambda=lambda: findInstallPath(),
+            ),
+            PathsDialog.PathSetting(
+                dialog=self,
+                labelText="Resources Folder",
+                settingKey="ResourceFolder",
+                tooltipText="Folder containing vanilla game resources.",
+                getCurrentPathLambda=lambda: mainWindow.findResourcePath(),
+                getDefaultPathLambda=lambda: os.path.join(
+                    findInstallPath(), "resources"
+                ),
+            ),
+            PathsDialog.PathSetting(
+                dialog=self,
+                labelText="Mods Folder",
+                settingKey="ModsFolder",
+                tooltipText="Folder containing installed mods.",
+                getCurrentPathLambda=lambda: findModsPath(),
+                getDefaultPathLambda=lambda: os.path.join(findInstallPath(), "mods"),
+            ),
+            PathsDialog.PathSetting(
+                dialog=self,
+                labelText=".exe Path",
+                settingKey="CustomExePath",
+                isFile=True,
+                tooltipText="Path to the executable file to launch the game when testing rooms.",
+                getCurrentPathLambda=lambda: mainWindow.findExecutablePath(),
+                getDefaultPathLambda=lambda: os.path.join(
+                    findInstallPath(), "isaac-ng.exe"
+                ),
+                disableLambda=lambda: self.urlLaunchCheckbox.isChecked(),
+            ),
+        ]
+
+        # Create & populate the window layout.
+        layout = QVBoxLayout()
+
+        for pathSetting in self.pathSettings:
+            if pathSetting.settingKey == "ModsFolder" and version not in [
+                "Afterbirth+",
+                "Repentance",
+                "Repentance+",
+            ]:
+                continue
+            layout.addLayout(pathSetting.layout)
+            if pathSetting.settingKey == "CustomExePath" and version != "Antibirth":
+                # Place the ForceUrlLaunch checkbox underneath the CustomExePath settings.
+                self.urlLaunchCheckbox.exePathSetting = pathSetting
+                forceUrlLaunchLayout = QHBoxLayout()
+                forceUrlLaunchLayout.addSpacing(PathsDialog.LABEL_MAX_WIDTH + 6)
+                forceUrlLaunchLayout.addWidget(self.urlLaunchCheckbox)
+                layout.addLayout(forceUrlLaunchLayout)
+
+        self.setLayout(layout)
+        self.adjustSize()
+        # Make the window wider
+        self.resize(int(self.width() * 2.5), int(self.height()))
 
 
 class HooksDialog(QDialog):
@@ -4160,23 +4598,39 @@ class TestConfigDialog(QDialog):
         self.characterConfig = TestConfigDialog.ConfigItem(
             "Character",
             "TestCharacter",
-            "Character to switch to when testing. (Isaac, Magdalene, etc.) If omitted, use the game's default",
+            "Character to switch to when testing. (Isaac, Magdalene, etc.) If omitted, use the game's default.",
         )
         self.characterEntry = QLineEdit()
         characterLayout.addWidget(self.characterConfig)
         characterLayout.addWidget(self.characterEntry)
         characterWidget = QWidget()
         characterWidget.setLayout(characterLayout)
-        if version not in ["Repentance"]:
+        if version not in ["Repentance", "Repentance+"]:
             characterWidget.setEnabled(False)
         self.layout.addWidget(characterWidget)
+
+        hardModeLayout = QHBoxLayout()
+        self.hardModeConfig = TestConfigDialog.ConfigItem(
+            "Hard Mode",
+            "TestHardMode",
+            "Whether to enable hard mode when testing. If omitted, run in normal mode. (requires REPENTOGON)",
+        )
+        self.hardModeCheck = QCheckBox()
+        self.hardModeCheck.setToolTip(self.hardModeConfig.toolTip())
+        hardModeLayout.addWidget(self.hardModeConfig)
+        hardModeLayout.addWidget(self.hardModeCheck)
+        hardModeWidget = QWidget()
+        hardModeWidget.setLayout(hardModeLayout)
+        if not canUseREPENTOGON():
+            hardModeWidget.setEnabled(False)
+        self.layout.addWidget(hardModeWidget)
 
         # commands
         commandLayout = QVBoxLayout()
         self.commandConfig = TestConfigDialog.ConfigItem(
             "Debug Commands",
             "TestCommands",
-            "Debug Console Commands that will get run one at a time after other BR initialization has finished",
+            "Debug Console Commands that will get run one at a time after other BR initialization has finished.",
             [],
         )
         pane = QVBoxLayout()
@@ -4188,7 +4642,6 @@ class TestConfigDialog(QDialog):
         pane.addWidget(self.commandList)
 
         addButton = QPushButton("Add")
-        editButton = QPushButton("Edit")
         deleteButton = QPushButton("Delete")
 
         buttons = QHBoxLayout()
@@ -4206,13 +4659,13 @@ class TestConfigDialog(QDialog):
 
         # enable/disable
         enableLayout = QHBoxLayout()
-        self.enableConfig = TestConfigDialog.ConfigItem(
+        self.disableConfig = TestConfigDialog.ConfigItem(
             "Enabled",
             "TestConfigDisabled",
             "Enable/disable the test config bonus settings",
         )
         self.enableCheck = QCheckBox("Enabled")
-        self.enableCheck.setToolTip(self.enableConfig.toolTip())
+        self.enableCheck.setToolTip(self.disableConfig.toolTip())
         enableLayout.addWidget(self.enableCheck)
         enableWidget = QWidget()
         enableWidget.setLayout(enableLayout)
@@ -4226,10 +4679,13 @@ class TestConfigDialog(QDialog):
         self.setLayout(self.layout)
 
     def enabled(self):
-        return None if self.enableCheck.isChecked() else "1"
+        return self.enableCheck.isChecked()
 
     def character(self):
         return self.characterEntry.text() or None
+
+    def isHardMode(self):
+        return self.hardModeCheck.isChecked()
 
     def commands(self):
         return [
@@ -4237,17 +4693,18 @@ class TestConfigDialog(QDialog):
         ] or None
 
     def setValues(self):
-        self.enableCheck.setChecked(self.enableConfig.val != "1")
+        self.enableCheck.setChecked(self.disableConfig.val != "1")
         self.characterEntry.setText(self.characterConfig.val)
+        self.hardModeCheck.setChecked(self.hardModeConfig.val == "1")
         self.commandList.clear()
         self.commandList.addItems(self.commandConfig.val)
         for i in range(self.commandList.count()):
             item = self.commandList.item(i)
-            item.setFlags(item.flags() | Qt.ItemIsEditable)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
 
     def addCommand(self):
         item = QListWidgetItem("combo 2")
-        item.setFlags(item.flags() | Qt.ItemIsEditable)
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
         self.commandList.addItem(item)
 
     def deleteCommand(self):
@@ -4255,8 +4712,9 @@ class TestConfigDialog(QDialog):
             self.commandList.takeItem(self.commandList.currentRow())
 
     def closeEvent(self, evt):
-        self.enableConfig.val = self.enabled()
+        self.disableConfig.val = "1" if not self.enabled() else None
         self.characterConfig.val = self.character()
+        self.hardModeConfig.val = "1" if self.isHardMode() else None
         self.commandConfig.val = self.commands()
         QWidget.closeEvent(self, evt)
 
@@ -4371,8 +4829,8 @@ class FilterDialog(QDialog):
             for tag in xmlLookups.entities.tags.values():
                 if tag.filterable:
                     tagItem = FilterDialog.TagFilterEntry.TagFilterListItem(tag)
-                    tagItem.setFlags(tagItem.flags() | Qt.ItemIsUserCheckable)
-                    tagItem.setCheckState(Qt.Unchecked)
+                    tagItem.setFlags(tagItem.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    tagItem.setCheckState(Qt.CheckState.Unchecked)
                     self.tagsList.addItem(tagItem)
 
             self.setVals()
@@ -4396,9 +4854,9 @@ class FilterDialog(QDialog):
             for row in range(self.tagsList.count()):
                 item = self.tagsList.item(row)
                 item.setCheckState(
-                    Qt.Checked
+                    Qt.CheckState.Checked
                     if item.config.tag in filterData["tags"]
-                    else Qt.Unchecked
+                    else Qt.CheckState.Unchecked
                 )
 
         def updateVals(self):
@@ -4414,7 +4872,7 @@ class FilterDialog(QDialog):
             checkedTags = []
             for row in range(self.tagsList.count()):
                 item = self.tagsList.item(row)
-                if item.checkState() == Qt.Checked:
+                if item.checkState() == Qt.CheckState.Checked:
                     checkedTags.append(item.config.tag)
 
             filterData["tags"] = checkedTags
@@ -4474,7 +4932,7 @@ class StatisticsDialog(QDialog):
                 self.property = property
                 self.sortValue = getattr(self.entry, self.property)
                 self.formatAsPercent = formatAsPercent
-                self.setFlags(Qt.ItemIsEnabled)
+                self.setFlags(Qt.ItemFlag.ItemIsEnabled)
 
             def __lt__(self, otherItem):
                 if (
@@ -4513,7 +4971,7 @@ class StatisticsDialog(QDialog):
 
             self.table.insertRow(0)
             self.nameWidget = QTableWidgetItem()
-            self.nameWidget.setFlags(Qt.ItemIsEnabled)
+            self.nameWidget.setFlags(Qt.ItemFlag.ItemIsEnabled)
 
             if self.tag:
                 self.nameWidget.setText(self.tag.label or self.tag.tag)
@@ -4748,7 +5206,7 @@ class StatisticsDialog(QDialog):
         self.refresh()
 
         self.statisticsTable.setSortingEnabled(True)
-        self.statisticsTable.sortItems(1, Qt.DescendingOrder)
+        self.statisticsTable.sortItems(1, Qt.SortOrder.DescendingOrder)
         self.statisticsTable.verticalHeader().hide()
         self.statisticsTable.resizeColumnsToContents()
 
@@ -4811,16 +5269,16 @@ class StatisticsDialog(QDialog):
 class MainWindow(QMainWindow):
     def keyPressEvent(self, event):
         QMainWindow.keyPressEvent(self, event)
-        if event.key() == Qt.Key_Alt:
+        if event.key() == Qt.Key.Key_Alt:
             self.roomList.mirrorButtonOn()
-        if event.key() == Qt.Key_Shift:
+        if event.key() == Qt.Key.Key_Shift:
             self.roomList.mirrorYButtonOn()
 
     def keyReleaseEvent(self, event):
         QMainWindow.keyReleaseEvent(self, event)
-        if event.key() == Qt.Key_Alt:
+        if event.key() == Qt.Key.Key_Alt:
             self.roomList.mirrorButtonOff()
-        if event.key() == Qt.Key_Shift:
+        if event.key() == Qt.Key.Key_Shift:
             self.roomList.mirrorYButtonOff()
 
     def __init__(self):
@@ -4885,10 +5343,11 @@ class MainWindow(QMainWindow):
 
     FIXUP_PNGS = (
         "resources/UI/",
-        "resources/Entities/5.100.0 - Collectible.png",
-        "resources/Backgrounds/Door.png",
-        "resources/Backgrounds/DisabledDoor.png",
-        "resources/Entities/questionmark.png",
+        "resources/Backgrounds/",
+        "resources/Entities/",
+        "resources/Overlays/",
+        "resources/modtemplate/resources/",
+        "resources/none.png",
     )
 
     def fixupLookups(self):
@@ -4901,25 +5360,32 @@ class MainWindow(QMainWindow):
         savedPaths = {}
 
         def fixImage(path):
+            path = str(path)
             if path not in savedPaths:
                 savedPaths[path] = True
-                formatFix = QImage(path)
-                formatFix.save(path)
+                subprocess.run(
+                    [
+                        "magick",
+                        "mogrify",
+                        "-strip",
+                        "-channel",
+                        "RGBA",
+                        "-define",
+                        "png:color-type=6",
+                        path,
+                    ]
+                )
+                print("Fixed", path)
+
+        def fixPath(path: Path):
+            if path.is_dir():
+                for child in path.iterdir():
+                    fixPath(child)
+            elif path.is_file() and path.suffix == ".png":
+                fixImage(path)
 
         for fixupPath in MainWindow.FIXUP_PNGS:
-            dirPath = Path(fixupPath)
-            if dirPath.is_dir():
-                for dirPath, dirNames, filenames in os.walk(dirPath):
-                    for filename in filenames:
-                        path = os.path.join(dirPath, filename)
-                        fixPath = Path(path)
-                        if fixPath.is_file() and fixPath.suffix == ".png":
-                            fixImage(path)
-
-            elif dirPath.is_file() and dirPath.suffix == ".png":
-                fixImage(fixupPath)
-            else:
-                printf(f"{fixupPath} is not a valid directory or png file")
+            fixPath(Path(fixupPath))
 
         entities = xmlLookups.entities.lookup()
         for config in entities:
@@ -4929,13 +5395,25 @@ class MainWindow(QMainWindow):
             if config.editorImagePath:
                 fixImage(config.editorImagePath)
 
+            if config.overlayImagePath:
+                fixImage(config.overlayImagePath)
+
+            if config.renderPitExtraConnections:
+                for pitPath in config.renderPitExtraConnections:
+                    fixImage(pitPath)
+
+        roomTypes = xmlLookups.roomTypes.lookup()
+        for roomType in roomTypes:
+            if roomType.get("Icon") is not None:
+                fixImage(roomType.get("Icon"))
+
         nodes = xmlLookups.stages.lookup()
         nodes.extend(xmlLookups.roomTypes.lookup())
 
         for node in nodes:
             gfxs = node.findall("Gfx")
             if node.get("BGPrefix") is not None:
-                gfx.append(node)
+                gfxs.append(node)
 
             for gfx in gfxs:
                 for key, imgPath in xmlLookups.getGfxData(gfx)["Paths"].items():
@@ -4982,17 +5460,7 @@ class MainWindow(QMainWindow):
             QKeySequence("Ctrl+F10"),
         )
         f.addSeparator()
-        self.fh = f.addAction(
-            "Set Resources Path",
-            self.setDefaultResourcesPath,
-            QKeySequence("Ctrl+Shift+P"),
-        )
-        self.fi = f.addAction(
-            "Reset Resources Path",
-            self.resetResourcesPath,
-            QKeySequence("Ctrl+Shift+R"),
-        )
-        f.addSeparator()
+        self.fj = f.addAction("Set Paths", self.showSetPathsMenu)
         self.fj = f.addAction("Set Hooks", self.showHooksMenu)
         self.fl = f.addAction(
             "Autogenerate mod content (discouraged)",
@@ -5181,7 +5649,7 @@ class MainWindow(QMainWindow):
 
         self.roomList.list.currentItemChanged.connect(self.handleSelectedRoomChanged)
 
-        self.addDockWidget(Qt.RightDockWidgetArea, self.roomListDock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.roomListDock)
 
         self.EntityPalette = EntityPalette()
         self.EntityPaletteDock = QDockWidget("Entity Palette")
@@ -5192,7 +5660,7 @@ class MainWindow(QMainWindow):
         self.EntityPalette.objChanged.connect(self.handleObjectChanged)
         self.EntityPalette.objReplaced.connect(self.handleObjectReplaced)
 
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.EntityPaletteDock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.EntityPaletteDock)
 
     def setupStatusBar(self):
         self.statusBar = QStatusBar()
@@ -5209,8 +5677,7 @@ class MainWindow(QMainWindow):
             },
         ]
 
-        q = QImage()
-        q.load("resources/UI/uiIcons.png")
+        q = anm2.loadImage("resources/UI/uiIcons.png")
         for infoObj in tooltipElements:
             for subicon in infoObj["icons"]:
                 iconObj = QLabel()
@@ -5222,7 +5689,7 @@ class MainWindow(QMainWindow):
             label = QLabel(infoObj["label"])
             label.setContentsMargins(0, 0, 20, 0)
             label.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Expanding)
-            label.setAlignment(Qt.AlignTop)
+            label.setAlignment(Qt.AlignmentFlag.AlignTop)
             self.statusBar.addWidget(label)
 
         self.setStatusBar(self.statusBar)
@@ -5266,11 +5733,13 @@ class MainWindow(QMainWindow):
         return True
 
     def dirt(self):
-        self.setWindowIcon(QIcon("resources/UI/BasementRenovator-SmallDirty.png"))
+        self.setWindowIcon(
+            anm2.loadIcon("resources/UI/BasementRenovator-SmallDirty.png")
+        )
         self.dirty = True
 
     def clean(self):
-        self.setWindowIcon(QIcon("resources/UI/BasementRenovator-Small.png"))
+        self.setWindowIcon(anm2.loadIcon("resources/UI/BasementRenovator-Small.png"))
         self.dirty = False
 
     def storeEntityList(self, room=None):
@@ -5387,10 +5856,14 @@ class MainWindow(QMainWindow):
         self.roomList.list.clear()
         self.scene.clear()
         self.path = ""
-        self.floorInfo = xmlLookups.stages.lookup(name="Basement")[-1]
+        self.floorInfo = xmlLookups.stages.lookupOne(name="Basement")
 
         self.dirt()
         self.roomList.changeFilter()
+
+    def showSetPathsMenu(self):
+        paths = PathsDialog(self)
+        paths.show()
 
     def setDefaultResourcesPath(self):
         settings = QSettings("settings.ini", QSettings.IniFormat)
@@ -5557,10 +6030,9 @@ class MainWindow(QMainWindow):
         self.path = path
 
         global xmlLookups
-        self.floorInfo = (
-            xmlLookups.stages.lookup(path=self.path)
-            or xmlLookups.stages.lookup(name="Basement")
-        )[-1]
+        self.floorInfo = xmlLookups.stages.lookupOne(path=self.path)
+        if self.floorInfo is None:
+            self.floorInfo = xmlLookups.stages.lookupOne(name="Basement")
 
         roomFile = None
         try:
@@ -5647,7 +6119,7 @@ class MainWindow(QMainWindow):
 
                         if config is None or config.invalid:
                             printf(
-                                f"Room {room.getPrefix()} has invalid entity '{config is None and 'UNKNOWN' or config.name}'! ({eType}.{eVariant}.{eSubtype})"
+                                f"Room {room.getPrefix()} has invalid entity '{config is None and 'UNKNOWN' or config.name}'! ({EntityData.toString(eType, eVariant, eSubtype)})"
                             )
                         seenSpawns[(eType, eSubtype, eVariant)] = (
                             config is None or config.invalid
@@ -5940,7 +6412,7 @@ class MainWindow(QMainWindow):
             int(self.scene.sceneRect().height()),
             QImage.Format_ARGB32,
         )
-        ScreenshotImage.fill(Qt.transparent)
+        ScreenshotImage.fill(QColorConstants.Transparent)
 
         RenderPainter = QPainter(ScreenshotImage)
         self.scene.render(
@@ -6005,44 +6477,43 @@ class MainWindow(QMainWindow):
             strFix = lambda x: f'''"{x.replace(bs, bs + bs).replace('"', quot)}"'''
 
             char = None
+            isHardMode = False
             commands = []
             if settings.value("TestConfigDisabled") != "1":
                 char = settings.value("TestCharacter")
                 if char:
                     char = strFix(char)
-
+                isHardMode = settings.value("TestHardMode") == "1"
                 commands = settings.value("TestCommands", [])
 
-            roomsStr = ",\n\t".join(
+            roomsStr = ",\n\t\t".join(
                 map(
                     lambda testRoom: f"""{{
-        Name = {strFix(testRoom.name)},
-        Type = {testRoom.info.type},
-        Variant = {testRoom.info.variant},
-        Subtype = {testRoom.info.subtype},
-        Shape = {testRoom.info.shape}
-    }}""",
+\t\t\tName = {strFix(testRoom.name)},
+\t\t\tType = {testRoom.info.type},
+\t\t\tVariant = {testRoom.info.variant},
+\t\t\tSubtype = {testRoom.info.subtype},
+\t\t\tShape = {testRoom.info.shape}
+\t\t}}""",
                     testRooms,
                 )
             )
 
-            testData.write(
-                f"""return {{
-    TestType = {strFix(testType)},
-    Character = {char or 'nil'}, -- only used in Repentance
-    Commands = {{ {', '.join(map(strFix, commands))} }},
-    Stage = {floorInfo.get('Stage')},
-    StageType = {floorInfo.get('StageType')},
-    StageName = {strFix(floorInfo.get('Name'))},
-    IsModStage = {floorInfo.get('BaseGamePath') is None and 'true' or 'false'},
-    DisableUI = {settings.value("DisableInGameUI")},
-    RoomFile = {strFix(str(Path(self.path)) or 'N/A')},
-    Rooms = {{
-        {roomsStr}
+            testData.write(f"""return {{
+\tTestType = {strFix(testType)},
+\tCharacter = {char or 'nil'}, -- only used in Repentance and Repentance+
+\tIsHardMode = {isHardMode and 'true' or 'false'}, -- only used in Repentance+ with REPENTOGON
+\tCommands = {{ {', '.join(map(strFix, commands))} }},
+\tStage = {floorInfo.get('Stage')},
+\tStageType = {floorInfo.get('StageType')},
+\tStageName = {strFix(floorInfo.get('Name'))},
+\tIsModStage = {floorInfo.get('BaseGamePath') is None and 'true' or 'false'},
+\tDisableUI = {settings.value("DisableInGameUI") == "1" and 'true' or 'false'},
+\tRoomFile = {strFix(str(Path(self.path)) or 'N/A')},
+\tRooms = {{
+\t\t{roomsStr}
     }}
-}}
-"""
-            )
+}}""")
 
     def disableTestMod(self, modPath=None):
         modPath = modPath or self.getTestModPath()
@@ -6055,7 +6526,7 @@ class MainWindow(QMainWindow):
     # Test by replacing the rooms in the relevant floor
     def testMap(self):
         def setup(modPath, roomsPath, floorInfo, rooms, version):
-            if version not in ["Afterbirth+", "Repentance"]:
+            if version not in ["Afterbirth+", "Repentance", "Repentance+"]:
                 QMessageBox.warning(
                     self, "Error", f"Stage Replacement not supported for {version}!"
                 )
@@ -6136,7 +6607,7 @@ class MainWindow(QMainWindow):
                 raise
             testRoom = testRoom[0]
 
-            if version not in ["Afterbirth+", "Repentance"]:
+            if version not in ["Afterbirth+", "Repentance", "Repentance+"]:
                 QMessageBox.warning(
                     self,
                     "Error",
@@ -6223,12 +6694,12 @@ class MainWindow(QMainWindow):
                     raise
 
                 baseSpecialPath = "00.special rooms"
-                extraInfo = xmlLookups.stages.lookup(
+                extraInfo = xmlLookups.stages.lookupOne(
                     stage=floorInfo.get("Stage"),
                     stageType=floorInfo.get("StageType"),
                     baseGamePath=True,
                 )
-                basePath = floorInfo.get("BaseGamePath") or extraInfo[-1].get(
+                basePath = floorInfo.get("BaseGamePath") or extraInfo.get(
                     "BaseGamePath"
                 )
 
@@ -6293,9 +6764,17 @@ class MainWindow(QMainWindow):
                     "",
                 )
 
+            # Prefix the file path with the root that Proton uses
+            # Only necessary for Repentance and Repentance+ as they don't have native Linux support.
+            if (
+                version in ["Repentance", "Repentance+"]
+                and "Linux" in platform.system()
+            ):
+                modPath = "Z:/" + modPath
+
             return (
                 [
-                    f"--load-room={path}",
+                    f"--load-room={PureWindowsPath(modPath) / testfile}",
                     f"--set-stage={floorInfo.get('Stage')}",
                     f"--set-stage-type={floorInfo.get('StageType')}",
                 ],
@@ -6306,6 +6785,10 @@ class MainWindow(QMainWindow):
         self.testMapCommon("InstaPreview", setup)
 
     def findExecutablePath(self):
+        if QFile.exists(settings.value("CustomExePath")):
+            if willLaunchREPENTOGON() == canUseREPENTOGON():
+                return settings.value("CustomExePath")
+
         if "Windows" in platform.system():
             installPath = findInstallPath()
             if installPath:
@@ -6469,26 +6952,45 @@ class MainWindow(QMainWindow):
         try:
             # try to run through steam to avoid steam confirmation popup, else run isaac directly
             # if there exists drm free copies, allow the direct exe launch method
-            steamPath = None
-            if version != "Antibirth" and settings.value("ForceExeLaunch") != "1":
-                steamPath = getSteamPath() or ""
+            forceUrlLaunch = settings.value("ForceUrlLaunch") == "1"
 
-            if steamPath:
+            customExePath = settings.value("CustomExePath")
+            useCustomExe = not forceUrlLaunch and QFile.exists(customExePath)
+
+            useSteamExe = False
+            steamPath = None
+            if (
+                not forceUrlLaunch
+                and not useCustomExe
+                and version != "Antibirth"
+                and settings.value("ForceExeLaunch") != "1"
+            ):
+                steamPath = getSteamPath()
+                useSteamExe = steamPath is not None
+
+            exePath = None
+
+            if useCustomExe:
+                exePath = customExePath
+            elif useSteamExe:
                 exePath = f"{steamPath}\\Steam.exe"
             else:
                 exePath = self.findExecutablePath()
 
-            if (
-                exePath
-                and QFile.exists(exePath)
-                and settings.value("ForceUrlLaunch") != "1"
-            ):
-                if steamPath:
+            if exePath and QFile.exists(exePath) and not forceUrlLaunch:
+                wd = installPath
+
+                if useCustomExe:
+                    # Pass a `--basement-renovator` flag to custom exes for identification purposes.
+                    # Note that if this flag does get passed to Isaac itself, it won't have any effect.
+                    launchArgs = ["--basement-renovator"] + launchArgs
+                    wd = os.path.dirname(exePath)
+                elif useSteamExe:
                     launchArgs = ["-applaunch", "250900"] + launchArgs
 
                 appArgs = [exePath] + launchArgs
                 printf("Test: Running executable", " ".join(appArgs))
-                subprocess.Popen(appArgs, cwd=installPath)
+                subprocess.Popen(appArgs, cwd=wd)
             else:
                 args = " ".join(map(lambda x: " " in x and f'"{x}"' or x, launchArgs))
                 urlArgs = urllib.parse.quote(args)
@@ -6699,7 +7201,7 @@ if __name__ == "__main__":
 
     # Application
     app = QApplication(sys.argv)
-    app.setWindowIcon(QIcon("resources/UI/BasementRenovator.png"))
+    app.setWindowIcon(anm2.loadIcon("resources/UI/BasementRenovator.png"))
 
     cmdParser = QCommandLineParser()
     cmdParser.setApplicationDescription(
