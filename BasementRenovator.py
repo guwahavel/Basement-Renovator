@@ -6353,7 +6353,9 @@ class MainWindow(QMainWindow):
         self.sortRoomsByKey(lambda x: (x.info.type, x.info.subtype, x.info.variant))
 
     def sortRoomNames(self):
-        self.sortRoomsByKey(lambda x: (x.info.type, x.info.subtype, x.name, x.info.variant))
+        self.sortRoomsByKey(
+            lambda x: (x.info.type, x.info.subtype, x.name, x.info.variant)
+        )
 
     def sortRoomsByKey(self, key):
         roomList = self.roomList.list
