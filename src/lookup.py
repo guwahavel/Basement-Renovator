@@ -10,6 +10,7 @@ from src.constants import *
 from src.core import Entity
 from src.entitiesgenerator import generateXMLFromEntities2
 from src.util import *
+from src.version import *
 
 
 def loadXMLFile(path):
@@ -1429,7 +1430,7 @@ class MainLookup:
                     except ET.ParseError as e:
                         printf(f'ERROR parsing entities2 xml for mod "{modName}": {e}')
                         return
-                else:
+                elif canUseREPENTOGON():
                     entities2Path = os.path.join(
                         modPath, "content-repentogon/entities2.xml"
                     )
