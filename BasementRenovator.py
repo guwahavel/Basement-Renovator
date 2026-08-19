@@ -139,11 +139,33 @@ from src.lookup import EntityLookup, MainLookup
 import src.anm2 as anm2
 from src.constants import *
 from src.util import *
-from src.version import *
 
 ########################
 #       XML Data       #
 ########################
+
+
+def getGameVersion():
+    """
+    Returns the current compatibility mode, and the sub version if it exists
+    """
+    # default mode if not set
+    mode = settings.value("CompatibilityMode", "Repentance+")
+
+    return mode
+
+
+def willLaunchREPENTOGON():
+    exePath: str | None = settings.value("CustomExePath")
+    return exePath and exePath.lower().endswith("repentogonlauncher.exe")
+
+
+def canUseREPENTOGON():
+    if getGameVersion() != "Repentance+":
+        return False
+
+    return willLaunchREPENTOGON()
+
 
 STEAM_PATH = None
 
@@ -6331,7 +6353,9 @@ class MainWindow(QMainWindow):
         self.sortRoomsByKey(lambda x: (x.info.type, x.info.subtype, x.info.variant))
 
     def sortRoomNames(self):
-        self.sortRoomsByKey(lambda x: (x.info.type, x.info.subtype, x.name, x.info.variant))
+        self.sortRoomsByKey(
+            lambda x: (x.info.type, x.info.subtype, x.name, x.info.variant)
+        )
 
     def sortRoomsByKey(self, key):
         roomList = self.roomList.list
